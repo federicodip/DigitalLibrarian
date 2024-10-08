@@ -1,4 +1,5 @@
 #ISAW Papers Digital Librarian: A Retrieval-Augmented Generation (RAG) Chatbot
+
 This Python application allows users to interact with a collection of scholarly articles from the ISAW Papers (Institute for the Study of the Ancient World) through a Retrieval-Augmented Generation (RAG) chatbot. The application combines document retrieval and language generation using OpenAI's GPT model.
 
 Key Features:
