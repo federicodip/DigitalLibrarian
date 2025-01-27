@@ -1,0 +1,85 @@
+import os
+import re
+import csv
+from pdf2image import convert_from_path
+import pytesseract
+
+# Paths to input and output files
+pdf_list_file_path = r"C:\Users\feder\Desktop\pdf_list.txt"
+output_txt_path = "18nov_awdl_part5.txt"
+csv_file_path = r"C:\Users\feder\Desktop\pdf_titles_awdl.csv"
+txt_file_path = r"C:\Users\feder\Desktop\url_pdf_list.txt"
+
+# Read the list of PDF filenames
+with open(pdf_list_file_path, 'r') as file:
+    pdf_list = [line.strip() for line in file if line.strip()]
+
+# Function to find the URL associated with a PDF filename
+def find_url_for_pdf(pdf_filename, txt_file_path):
+    with open(txt_file_path, 'r', encoding='utf-8') as file:
+        for line in file:
+            line = line.strip()
+            if ', ' in line:
+                url, filename = [part.strip() for part in line.split(', ', 1)]
+                if filename == pdf_filename:
+                    return url
+    return ""
+
+# Function to extract the title from the CSV file
+def get_title_from_csv(pdf_filename, csv_path):
+    with open(csv_path, newline='', encoding="utf-8") as csvfile:
+        reader = csv.reader(csvfile, delimiter=',')
+        for row in reader:
+            if len(row) >= 2 and row[1].strip() == pdf_filename:
+                return row[0].strip()
+    print(f"URL NOT FOUND ------------ FOR {pdf_filename}")
+    return "Unknown Title"
+
+# Main function to process a single PDF file
+def extract_text_from_pdf(pdf_path, csv_file_path, output_txt_path):
+    pdf_filename = os.path.basename(pdf_path)
+    print(f"PDF filename: {pdf_filename}")
+    
+    # Retrieve the title from the CSV file
+    title = get_title_from_csv(pdf_filename, csv_file_path)
+    print(f"Title extracted from CSV: {title}")
+
+    # Open the output file in append mode
+    with open(output_txt_path, "a", encoding="utf-8") as text_file:
+        # Get the total number of pages in the PDF (processing one page at a time)
+        from pdf2image.pdf2image import pdfinfo_from_path
+        pdf_info = pdfinfo_from_path(pdf_path)
+        total_pages = pdf_info['Pages']
+
+        # Define the range of pages to process
+        start_page = 4  # Skip the first 3 pages
+        end_page = total_pages - 5  # Skip the last 5 pages
+
+        for page_number in range(start_page, end_page + 1):
+            print(f"Processing page {page_number} of {total_pages}")
+            # Convert the current page to an image
+            page_image = convert_from_path(
+                pdf_path, 
+                dpi=150,  # Reduced DPI to save memory
+                first_page=page_number, 
+                last_page=page_number
+            )[0]
+
+            # Perform OCR on the image
+            text = pytesseract.image_to_string(page_image, lang="eng+fra+ger")
+
+            # Optionally filter out footnotes
+            # text = filter_footnotes(text)
+
+            # Find the URL associated with the PDF
+            url = find_url_for_pdf(pdf_filename, txt_file_path)
+
+            # Write the title, page number, and extracted text to the output file
+            text_file.write(f"Title: {title} Source: {url}  Page: {page_number}\n")
+            text_file.write(text + "\n")
+
+    print(f"Text extraction complete for {pdf_filename}. Saved to {output_txt_path}")
+
+# Process only the first 2 PDFs in the list
+for pdf in pdf_list[374:]:
+    extract_text_from_pdf(f"D:/AWDL_pdfs/{pdf}", csv_file_path, output_txt_path)
