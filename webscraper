@@ -1,0 +1,89 @@
+import os
+import requests
+from bs4 import BeautifulSoup
+
+def download_pdf_from_url(page_url, output_folder):
+    """Downloads the first .pdf link found in the provided page URL."""
+    try:
+        # Make a request to fetch the HTML content of the page
+        response = requests.get(page_url)
+        response.raise_for_status()
+        
+        # Parse the HTML with BeautifulSoup
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Find the first high-resolution PDF link on the page
+        pdf_link = None
+        for a_tag in soup.find_all('a', href=True):
+            if a_tag['href'].endswith('.pdf'):
+                pdf_link = a_tag['href']
+                print(f"Found PDF link: {pdf_link}")
+                break
+        
+        # Check if a PDF link was found
+        if not pdf_link:
+            print("No PDF link found.")
+            return
+        
+        # Construct full URL if needed
+        if not pdf_link.startswith('http'):
+            pdf_link = requests.compat.urljoin(page_url, pdf_link)
+
+        # Extract the file name from the URL
+        file_name = os.path.basename(pdf_link)
+        output_path = os.path.join(output_folder, file_name)
+
+        # Download the PDF file
+        pdf_response = requests.get(pdf_link, stream=True)
+        pdf_response.raise_for_status()
+        
+        with open(output_path, 'wb') as pdf_file:
+            for chunk in pdf_response.iter_content(chunk_size=8192):
+                pdf_file.write(chunk)
+        
+        print(f"Downloaded PDF to: {output_path}")
+
+    except requests.RequestException as e:
+        print(f"An error occurred: {e}")
+
+output_folder = r'D:\AWDL_pdfs'  # Use a raw string to avoid escape sequence issues
+
+def generate_view_source_url(url):
+    """Generate the correct viewer URL from a given dlib.nyu.edu handle URL."""
+    try:
+        book_id = url.split('/')[-1]
+        viewer_url = f"https://sites.dlib.nyu.edu/viewer/books/{book_id}/1"
+        return viewer_url
+    except IndexError:
+        print(f"Error processing URL: {url}")
+        return None
+def read_file_to_list(filename, encoding='utf-8'):
+  """
+  Reads a text file and returns a list of strings, where each string
+  represents a line in the file.
+
+  Args:
+    filename: The path to the text file.
+    encoding: The encoding of the text file (default: utf-8).
+
+  Returns:
+    A list of strings containing the lines from the file.
+  """
+
+# Define the file path
+file_path = "C:/Users/feder/Desktop/url_list.txt"
+
+# Initialize an empty list to store URLs
+urls = []
+
+# Open the file and read each line, stripping newline characters
+with open(file_path, 'r') as file:
+    urls = [line.strip() for line in file]
+
+for url in urls:
+    # Generate the corrected URL
+    corrected_url = generate_view_source_url(url)
+    
+    # Download the PDF using the corrected URL
+    if corrected_url:
+        download_pdf_from_url(corrected_url, output_folder)
