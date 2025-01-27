@@ -1,0 +1,133 @@
+import subprocess
+import sys
+import torch
+
+
+major_version, minor_version = torch.cuda.get_device_capability()
+
+# subprocess.check_call([sys.executable, "-m", "pip", "install", "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"])
+
+# if major_version >= 8:
+#     subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-deps", "packaging", "ninja", "einops", "flash-attn", "xformers", "trl", "peft", "accelerate", "bitsandbytes"])
+# else:
+#     subprocess.check_call([sys.executable, "-m", "pip", "install", "--no-deps", "xformers", "trl", "peft", "accelerate", "bitsandbytes"])
+
+from unsloth import FastLanguageModel
+import torch
+max_seq_length = 2048 
+dtype = None
+load_in_4bit = False # Use 4bit quantization to reduce memory usage. Can be False.
+
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name = "best_llm_sofar",
+#   model_name = "unsloth/Meta-Llama-3-70b-bnb-4bit", # Llama-3 70b also works (just change the model name)
+    max_seq_length = max_seq_length,
+    dtype = dtype,
+    load_in_4bit = load_in_4bit,
+#    llm_int8_enable_fp32_cpu_offload=True,  # TEST
+#    device_map="auto"  # TEST
+    # token = "hf_...", # use token if using gated models like meta-llama/Llama-2-7b-hf
+)
+
+model = FastLanguageModel.get_peft_model(
+    model,
+    r = 16,
+    target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj",],
+    lora_alpha = 16,
+    lora_dropout = 0,
+    bias = "none",
+    use_gradient_checkpointing = "unsloth",
+    random_state = 3407,
+    use_rslora = False,
+    loftq_config = None,
+)
+alpaca_prompt = """Below is a question and its corresponding answer. Write an answer to the question based on the answer given. If you don't know the answer, just say so.
+
+### Question:
+{}
+
+### Answer:
+{}"""
+
+EOS_TOKEN = tokenizer.eos_token  
+
+def formatting_prompts_func(examples):
+    questions = examples["instruction"]
+    answers   = examples["output"]
+    texts = []
+    for question, answer in zip(questions, answers):
+        text = alpaca_prompt.format(question, answer) + EOS_TOKEN  # without this token generation goes on forever
+        texts.append(text)
+    return {"text": texts}
+
+from datasets import load_dataset, concatenate_datasets
+
+# Load the first dataset
+dataset = load_dataset("json", data_files="QAReadyForLLm.json", split="train")
+
+#add text field to combined dataset
+dataset = dataset.map(formatting_prompts_func, batched=True)
+
+from trl import SFTTrainer
+from transformers import TrainingArguments
+
+trainer = SFTTrainer(
+    model = model,
+    tokenizer = tokenizer,
+    train_dataset = dataset,
+    dataset_text_field = "text",
+    max_seq_length = max_seq_length,
+    dataset_num_proc = 2,
+    packing = False, 
+    args = TrainingArguments(
+        per_device_train_batch_size = 2,
+        gradient_accumulation_steps = 4,
+        warmup_steps = 5,
+        max_steps =120, # increase this to make the model learn "better"
+        num_train_epochs=4,  # back to 4 if it doesn't work
+        learning_rate = 2e-4,
+        fp16 = not torch.cuda.is_bf16_supported(),
+        bf16 = torch.cuda.is_bf16_supported(),
+        logging_steps = 1,
+        optim = "adamw_8bit",
+        weight_decay = 0.01,
+        lr_scheduler_type = "linear",
+        seed = 3407,
+        output_dir = "outputs",
+    ),
+)
+gpu_stats = torch.cuda.get_device_properties(0)
+start_gpu_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
+max_memory = round(gpu_stats.total_memory / 1024 / 1024 / 1024, 3)
+print(f"GPU = {gpu_stats.name}. Max memory = {max_memory} GB.")
+print(f"{start_gpu_memory} GB of memory reserved.")
+
+trainer_stats = trainer.train()
+
+#@title Show final memory and time stats
+used_memory = round(torch.cuda.max_memory_reserved() / 1024 / 1024 / 1024, 3)
+used_memory_for_lora = round(used_memory - start_gpu_memory, 3)
+used_percentage = round(used_memory         /max_memory*100, 3)
+lora_percentage = round(used_memory_for_lora/max_memory*100, 3)
+print(f"{trainer_stats.metrics['train_runtime']} seconds used for training.")
+print(f"{round(trainer_stats.metrics['train_runtime']/60, 2)} minutes used for training.")
+print(f"Peak reserved memory = {used_memory} GB.")
+print(f"Peak reserved memory for training = {used_memory_for_lora} GB.")
+print(f"Peak reserved memory % of max memory = {used_percentage} %.")
+print(f"Peak reserved memory for training % of max memory = {lora_percentage} %.")
+
+FastLanguageModel.for_inference(model)
+inputs = tokenizer(
+[
+    alpaca_prompt.format(
+        "List the prime numbers contained within the range.", # instruction
+        "1-50", # input
+        "", # output - leave this blank for generation!
+    )
+], return_tensors = "pt").to("cuda")
+
+outputs = model.generate(**inputs, max_new_tokens = 128, use_cache = True)
+tokenizer.batch_decode(outputs)
+
+model.save_pretrained("2Nov_llama3.1_instruct_2000QA") # Local saving
+# model.push_to_hub("your_name/lora_model", token = "...") For Huggingface Hub.
